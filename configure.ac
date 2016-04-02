@@ -11,7 +11,9 @@ AC_CONFIG_HEADERS([config.h])
 AC_PROG_CC
 
 # Checks for libraries.
-AC_CHECK_LIB([avformat],[av_register_all])
+AC_CHECK_LIB([avformat], [av_register_all])
+AC_CHECK_LIB([avcodec], [avcodec_open2])
+AC_CHECK_LIB([avutil], [av_freep])
 
 # Checks for header files.
 AC_CHECK_HEADERS([unistd.h])
