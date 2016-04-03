@@ -212,6 +212,11 @@ static int decode_packet(AVPacket *pkt, int *got_frame)
              * You should use libswresample or libavfilter to convert the frame
              * to packed data. */
             //fwrite(frame->extended_data[0], 1, unpadded_linesize, audio_dst_file);
+            ret = SDL_QueueAudio(1, frame->extended_data[0], unpadded_linesize);
+		if (ret < 0) {
+			fprintf(stderr, "SDL_QueueAudio: %s\n", SDL_GetError());
+			return ret;
+		}
         }
     }
 
@@ -236,10 +241,7 @@ int sfp_refresh_thread(void *opaque){
             SDL_PushEvent(&event);  
         }  
         SDL_Delay(40);  
-    } 
-
-    thread_exit=0;  
-    thread_pause=0;
+    }
 
     //Break  
     SDL_Event event;  
@@ -261,6 +263,7 @@ static void sdl_event_loop()
 
 				/* if prev pkt was cosumed, read next */
 				if (pkt->size <= 0) {
+					av_packet_unref(pkt);
 					av_read_frame(fmt_ctx, pkt);
 				}
 
@@ -345,8 +348,27 @@ int main(int argc, char *argv[])
 	}
 
 	if (open_codec_context(&audio_stream_idx, fmt_ctx, AVMEDIA_TYPE_AUDIO) >= 0) {
-	    audio_stream = fmt_ctx->streams[audio_stream_idx];
-	    audio_dec_ctx = audio_stream->codec;
+		audio_stream = fmt_ctx->streams[audio_stream_idx];
+		audio_dec_ctx = audio_stream->codec;
+
+		SDL_AudioSpec wanted_spec, spec;
+		memset(&wanted_spec, 0, sizeof(wanted_spec));
+		memset(&spec, 0, sizeof(spec));
+
+		// Set audio settings from codec info
+		wanted_spec.freq = audio_dec_ctx->sample_rate;
+		wanted_spec.format = AUDIO_S16SYS;
+		wanted_spec.channels = audio_dec_ctx->channels;
+		wanted_spec.samples = 1024;
+
+		if (SDL_OpenAudio(&wanted_spec, &spec) < 0) {
+			fprintf(stderr, "SDL_OpenAudio: %s\n", SDL_GetError());
+			ret = 1;
+			goto end;
+		}
+
+		// start play sound
+		SDL_PauseAudio(0);
 	}
 
 	/* dump input information to stderr */
