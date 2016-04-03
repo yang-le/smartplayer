@@ -29,9 +29,9 @@ static AVPacket *pkt = NULL;
 static int video_frame_count = 0;
 static int audio_frame_count = 0;
 
-SDL_Texture* sdlTexture = NULL;
-SDL_Renderer* sdlRenderer = NULL;
-SDL_Rect sdlRect = {0, 0, 0, 0};
+static SDL_Texture* sdlTexture = NULL;
+static SDL_Renderer* sdlRenderer = NULL;
+static SDL_Rect sdlRect = {0, 0, 0, 0};
 
 static char* parse_args(int argc, char *argv[])
 {
@@ -218,10 +218,90 @@ static int decode_packet(AVPacket *pkt, int *got_frame)
     return decoded;
 }
 
+//Refresh Event  
+#define SFM_REFRESH_EVENT  (SDL_USEREVENT + 1) 
+#define SFM_BREAK_EVENT  (SDL_USEREVENT + 2)  
+
+static int thread_exit=0;  
+static int thread_pause=0;
+
+int sfp_refresh_thread(void *opaque){  
+    thread_exit=0;  
+    thread_pause=0;  
+  
+    while (!thread_exit) {  
+        if(!thread_pause){  
+            SDL_Event event;  
+            event.type = SFM_REFRESH_EVENT;  
+            SDL_PushEvent(&event);  
+        }  
+        SDL_Delay(40);  
+    } 
+
+    thread_exit=0;  
+    thread_pause=0;
+
+    //Break  
+    SDL_Event event;  
+    event.type = SFM_BREAK_EVENT;  
+    SDL_PushEvent(&event);
+
+    return 0;  
+} 
+
+static void sdl_event_loop()
+{
+	for (;;) {	
+		SDL_Event event;
+		SDL_WaitEvent(&event);
+		
+		if(event.type==SFM_REFRESH_EVENT){
+			while(1) {
+				int got_frame = 0;
+
+				/* if prev pkt was cosumed, read next */
+				if (pkt->size <= 0) {
+					av_read_frame(fmt_ctx, pkt);
+				}
+
+				int ret = decode_packet(pkt, &got_frame);
+
+				if (ret < 0) {
+					thread_exit=1;
+					break;
+				}
+
+				/* update pkt's inner position */
+				pkt->data += ret;
+				pkt->size -= ret;
+
+				/* if not got frame, try again */
+				if (!got_frame) {
+					continue;				
+				}
+
+				/* we have processed a frame, break wait for next refresh event */
+				if(pkt->stream_index==video_stream_idx) {
+					break;	
+				}
+			}
+		} else if(event.type==SDL_KEYDOWN) {	
+			//Pause  
+			if(event.key.keysym.sym==SDLK_SPACE) {
+				thread_pause = !thread_pause;
+				debug_info("%s\n", thread_pause ? "paused" : "playing");
+			}
+		} else if(event.type==SDL_QUIT) {  
+			thread_exit=1;	
+		} else if(event.type==SFM_BREAK_EVENT) {	
+			break;	
+		} 
+	}
+}
+
 int main(int argc, char *argv[])
 {
 	int ret = 0;
-	int got_frame = 0;
 	char *infile = NULL;
 	
 	debug_info(PACKAGE_STRING"\n");
@@ -314,27 +394,22 @@ int main(int argc, char *argv[])
 		goto end;
 	}
 
-	/* read frames from the file */
-	while (av_read_frame(fmt_ctx, pkt) >= 0) {
-		do {
-		    ret = decode_packet(pkt, &got_frame);
-		    if (ret < 0)
-		        break;
-		    pkt->data += ret;
-		    pkt->size -= ret;
-		} while (pkt->size > 0);
-	}
-
-	do {
-		decode_packet(pkt, &got_frame);
-	} while (got_frame);
-
+	SDL_CreateThread(sfp_refresh_thread,NULL,NULL);
+	sdl_event_loop();
+	
 	//debug_info("Demuxing succeeded.\n");
 
 end:
+	SDL_Quit();
+
 	av_packet_free(&pkt);
 	av_frame_free(&frame);
+	av_frame_free(&frame_YUV);
+
+	avcodec_close(audio_dec_ctx);
 	avcodec_close(video_dec_ctx);
+	sws_freeContext(img_convert_ctx);
+	
 	avformat_close_input(&fmt_ctx);
 
 	return ret;
