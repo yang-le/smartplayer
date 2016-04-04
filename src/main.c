@@ -12,6 +12,7 @@
 #include <SDL2/SDL.h>
 
 #include "debug.h"
+#include "pktq.h"
 
 #define ARG_REQ(x) #x":"
 #define ARG_OPT(x) #x"::"
@@ -32,6 +33,9 @@ static int audio_frame_count = 0;
 static SDL_Texture* sdlTexture = NULL;
 static SDL_Renderer* sdlRenderer = NULL;
 static SDL_Rect sdlRect = {0, 0, 0, 0};
+
+static PacketQueue video_queue = PACKET_QUEUE_INITIALIZER;
+static PacketQueue audio_queue = PACKET_QUEUE_INITIALIZER;
 
 static char* parse_args(int argc, char *argv[])
 {
@@ -132,12 +136,13 @@ static int open_codec_context(int *stream_idx,
     return 0;
 }
 
-static int decode_packet(AVPacket *pkt, int *got_frame)
+static int decode_packet(AVPacket *pkt/*, int *got_frame*/)
 {
     int ret = 0;
     int decoded = pkt->size;
 
-    *got_frame = 0;
+    int _got_frame = 0;
+    int *got_frame = &_got_frame;
 
     if (pkt->stream_index == video_stream_idx) {
         /* decode video frame */
@@ -177,10 +182,7 @@ static int decode_packet(AVPacket *pkt, int *got_frame)
 
 		SDL_RenderClear(sdlRenderer);    
 		SDL_RenderCopy(sdlRenderer, sdlTexture,  NULL, &sdlRect);	  
-		SDL_RenderPresent(sdlRenderer);	 
-
-		//Delay 40ms  
-		SDL_Delay(40);
+		SDL_RenderPresent(sdlRenderer);	
         }
     }
 
@@ -223,70 +225,66 @@ static int decode_packet(AVPacket *pkt, int *got_frame)
     return decoded;
 }
 
+int decode_thread(void *opaque)\
+{
+	/* read frames from the file */
+	while (av_read_frame(fmt_ctx, pkt) >= 0) {
+		if(pkt->stream_index == video_stream_idx) {
+			packet_queue_put(&video_queue, pkt);
+		} else if(pkt->stream_index == audio_stream_idx) {
+			packet_queue_put(&audio_queue, pkt);
+		} else {
+			av_packet_unref(pkt);
+		}
+	}
+
+	return 0;
+}
+
 //Refresh Event  
 #define SFM_REFRESH_EVENT  (SDL_USEREVENT + 1) 
-#define SFM_BREAK_EVENT  (SDL_USEREVENT + 2)  
+#define SFM_AUDIO_EVENT  (SDL_USEREVENT + 2)  
+#define SFM_BREAK_EVENT  (SDL_USEREVENT + 3)  
 
-static int thread_exit=0;  
-static int thread_pause=0;
-
-int sfp_refresh_thread(void *opaque){  
-    thread_exit=0;  
-    thread_pause=0;  
-  
-    while (!thread_exit) {  
-        if(!thread_pause){  
-            SDL_Event event;  
-            event.type = SFM_REFRESH_EVENT;  
-            SDL_PushEvent(&event);  
-        }  
-        SDL_Delay(40);  
-    }
-
-    //Break  
+static Uint32 fire_audio_event(Uint32 interval, void *opaque)
+{  
     SDL_Event event;  
-    event.type = SFM_BREAK_EVENT;  
-    SDL_PushEvent(&event);
-
-    return 0;  
+    event.type = SFM_AUDIO_EVENT;  
+    SDL_PushEvent(&event);  
+   
+    return interval;  
 } 
+
+static Uint32 fire_video_event(Uint32 interval, void *opaque)
+{  
+    SDL_Event event;  
+    event.type = SFM_REFRESH_EVENT;  
+    SDL_PushEvent(&event);  
+   
+    return interval;  
+} 
+
 
 static void sdl_event_loop()
 {
+	int thread_pause=0;
+
 	for (;;) {	
 		SDL_Event event;
 		SDL_WaitEvent(&event);
 		
 		if(event.type==SFM_REFRESH_EVENT){
-			while(1) {
-				int got_frame = 0;
-
-				/* if prev pkt was cosumed, read next */
-				if (pkt->size <= 0) {
-					av_packet_unref(pkt);
-					av_read_frame(fmt_ctx, pkt);
-				}
-
-				int ret = decode_packet(pkt, &got_frame);
-
-				if (ret < 0) {
-					thread_exit=1;
-					break;
-				}
-
-				/* update pkt's inner position */
-				pkt->data += ret;
-				pkt->size -= ret;
-
-				/* if not got frame, try again */
-				if (!got_frame) {
-					continue;				
-				}
-
-				/* we have processed a frame, break wait for next refresh event */
-				if(pkt->stream_index==video_stream_idx) {
-					break;	
-				}
+			if (!thread_pause) {
+				// read from video_queue and paint
+				packet_queue_get(&video_queue, pkt);
+				decode_packet(pkt);
+				av_packet_unref(pkt);
+			}
+		} else if(event.type==SFM_AUDIO_EVENT) {
+			if (!thread_pause) {
+				packet_queue_get(&audio_queue, pkt);
+				decode_packet(pkt);
+				av_packet_unref(pkt);
 			}
 		} else if(event.type==SDL_KEYDOWN) {	
 			//Pause  
@@ -295,7 +293,7 @@ static void sdl_event_loop()
 				debug_info("%s\n", thread_pause ? "paused" : "playing");
 			}
 		} else if(event.type==SDL_QUIT) {  
-			thread_exit=1;	
+			break;	
 		} else if(event.type==SFM_BREAK_EVENT) {	
 			break;	
 		} 
@@ -345,6 +343,12 @@ int main(int argc, char *argv[])
 		pix_fmt = video_dec_ctx->pix_fmt;
 		img_convert_ctx = sws_getContext(width, height, pix_fmt,
 			width, height, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
+	}
+
+	if (sdl_init(width, height)) {
+		fprintf(stderr, "SDL init failed!\n");
+		ret = 1;
+		goto end;
 	}
 
 	if (open_codec_context(&audio_stream_idx, fmt_ctx, AVMEDIA_TYPE_AUDIO) >= 0) {
@@ -405,18 +409,18 @@ int main(int argc, char *argv[])
 		goto end;
 	}
 
+	packet_queue_init(&video_queue);
+	packet_queue_init(&audio_queue);
+
 	if (video_stream)
 		debug_info("Demuxing video from file '%s'\n", infile);
 	if (audio_stream)
 		debug_info("Demuxing audio from file '%s'\n", infile);
 
-	if (sdl_init(width, height)) {
-		fprintf(stderr, "SDL init failed!\n");
-		ret = 1;
-		goto end;
-	}
+	SDL_AddTimer(40, fire_video_event, NULL);	// interval to be calc from fps
+	SDL_AddTimer(50, fire_audio_event, NULL);	// interval to be calc from audio info
+	SDL_CreateThread(decode_thread,NULL,NULL);
 
-	SDL_CreateThread(sfp_refresh_thread,NULL,NULL);
 	sdl_event_loop();
 	
 	//debug_info("Demuxing succeeded.\n");
