@@ -18,14 +18,15 @@
 #define ARG_OPT(x) #x"::"
 
 static AVFormatContext *fmt_ctx = NULL;
-static int video_stream_idx = -1, audio_stream_idx = -1;
-static AVStream *video_stream = NULL, *audio_stream = NULL;
-static AVCodecContext *video_dec_ctx = NULL, *audio_dec_ctx = NULL;
+static int video_stream_idx = -1, audio_stream_idx = -1, sub_stream_idx = -1;
+static AVStream *video_stream = NULL, *audio_stream = NULL, *sub_stream = NULL;
+static AVCodecContext *video_dec_ctx = NULL, *audio_dec_ctx = NULL, *sub_dec_ctx = NULL;
 static struct SwsContext *img_convert_ctx = NULL;
 
 static int width = 0, height = 0;
 static enum AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
 static AVFrame *frame_audio = NULL, *frame_video = NULL, *frame_YUV = NULL;
+static AVSubtitle _frame_sub, *frame_sub = &_frame_sub;
 static int video_frame_count = 0;
 static int audio_frame_count = 0;
 
@@ -35,6 +36,7 @@ static SDL_Rect sdlRect = {0, 0, 0, 0};
 
 static PacketQueue video_queue = PACKET_QUEUE_INITIALIZER;
 static PacketQueue audio_queue = PACKET_QUEUE_INITIALIZER;
+static PacketQueue sub_queue = PACKET_QUEUE_INITIALIZER;
 
 static char* parse_args(int argc, char *argv[])
 {
@@ -217,6 +219,18 @@ static int decode_packet(AVPacket *pkt/*, int *got_frame*/)
         }
     }
 
+	if (pkt->stream_index == sub_stream_idx) {
+		ret = avcodec_decode_subtitle2(sub_dec_ctx, frame_sub, got_frame, pkt);
+		if (ret < 0) {
+			fprintf(stderr, "Error decoding sub frame (%s)\n", av_err2str(ret));
+			return ret;
+		}
+
+		if (*got_frame) {
+			fprintf(stderr, "sub frame goted!\n");
+		}
+	}
+
     return decoded;
 }
 
@@ -235,10 +249,14 @@ int decode_thread(void *opaque)\
 			packet_queue_put(&video_queue, pkt);
 		} else if(pkt->stream_index == audio_stream_idx) {
 			packet_queue_put(&audio_queue, pkt);
+		} else if(pkt->stream_index == sub_stream_idx) {
+			packet_queue_put(&sub_queue, pkt);
 		} else {
 			av_packet_unref(pkt);
 		}
 	}
+
+	debug_info("demux done\n");
 
 	av_packet_free(&pkt);
 	return 0;
@@ -246,10 +264,21 @@ int decode_thread(void *opaque)\
 
 // Event  
 #define USR_VIDEO_EVENT  (SDL_USEREVENT + 1) 
+#define USR_SUB_EVENT  (SDL_USEREVENT + 2) 
+
 static Uint32 fire_video_event(Uint32 interval, void *opaque)
 {  
     SDL_Event event;  
     event.type = USR_VIDEO_EVENT;  
+    SDL_PushEvent(&event);  
+   
+    return interval;  
+} 
+
+static Uint32 fire_sub_event(Uint32 interval, void *opaque)
+{  
+    SDL_Event event;  
+    event.type = USR_SUB_EVENT;  
     SDL_PushEvent(&event);  
    
     return interval;  
@@ -270,7 +299,13 @@ static void sdl_event_loop()
 				packet_queue_get(&video_queue, &video_pkt);
 				decode_packet(&video_pkt);
 			}
-		} else if(event.type==SDL_KEYDOWN) {	
+		} else if (event.type == USR_SUB_EVENT) {
+			if (!thread_pause) {
+				AVPacket sub_pkt;
+				packet_queue_get(&sub_queue, &sub_pkt);
+				decode_packet(&sub_pkt);
+			}
+		}else if(event.type==SDL_KEYDOWN) {	
 			//Pause  
 			if(event.key.keysym.sym==SDLK_SPACE) {
 				thread_pause = !thread_pause;
@@ -446,6 +481,11 @@ int main(int argc, char *argv[])
 		SDL_PauseAudio(0);
 	}
 
+	if (open_codec_context(&sub_stream_idx, fmt_ctx, AVMEDIA_TYPE_SUBTITLE) >= 0) {
+		sub_stream = fmt_ctx->streams[sub_stream_idx];
+		sub_dec_ctx = sub_stream->codec;
+	}
+
 	/* dump input information to stderr */
 	av_dump_format(fmt_ctx, 0, infile, 0);
 
@@ -466,13 +506,17 @@ int main(int argc, char *argv[])
 
 	packet_queue_init(&video_queue);
 	packet_queue_init(&audio_queue);
+	packet_queue_init(&sub_queue);
 
 	if (video_stream)
 		debug_info("Demuxing video from file '%s'\n", infile);
 	if (audio_stream)
 		debug_info("Demuxing audio from file '%s'\n", infile);
+	if (sub_stream)
+		debug_info("Demuxing subtitle from file '%s'\n", infile);
 
 	SDL_AddTimer(1000 / get_stream_fps(video_stream), fire_video_event, NULL);
+	SDL_AddTimer(2000, fire_sub_event, NULL);
 	SDL_CreateThread(decode_thread,NULL,NULL);
 
 	sdl_event_loop();
