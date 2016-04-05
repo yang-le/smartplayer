@@ -47,7 +47,7 @@ static SDL_AudioFormat get_format(enum AVSampleFormat sample_fmt)
     return fmt;
 }
 
-static void sdl_audio_callback(void *userdata, Uint8 *stream, int len)
+static void audio_proc(void *userdata, Uint8 *stream, int len)
 {
 	SDL_AudioSpec *spec = (SDL_AudioSpec *)userdata;
 
@@ -59,8 +59,11 @@ static void sdl_audio_callback(void *userdata, Uint8 *stream, int len)
 	while (len > 0){
 		if (*pos >= *size) { //already send all our data, get more
 			AVPacket audio_pkt;
-			audio_dequeue( &audio_pkt);
-			decode_audio_packet(&audio_pkt);
+			if (audio_dequeue(&audio_pkt)) {
+				decode_audio_packet(&audio_pkt);
+			} else {
+				break;
+			}
 			*pos = 0;
 		}
 
@@ -156,16 +159,13 @@ int sdl_audio_init(void)
 	wanted_spec.format = get_format(audio_dec_ctx->sample_fmt);
 	wanted_spec.channels = audio_dec_ctx->channels;
 	wanted_spec.samples = audio_dec_ctx->frame_size;
-	wanted_spec.callback = sdl_audio_callback;
+	wanted_spec.callback = audio_proc;
 	wanted_spec.userdata = &spec;
 
 	if (SDL_OpenAudio(&wanted_spec, &spec) < 0) {
 		fprintf(stderr, "SDL_OpenAudio: %s\n", SDL_GetError());
 		return 1;
 	}
-
-	// start play sound
-	SDL_PauseAudio(0);
 
 	return 0;
 }
@@ -183,5 +183,15 @@ int sdl_audio_init(void)
 /* inline */ int audio_dequeue(AVPacket *pkt)
 {
 	return packet_queue_get(&audio_queue, pkt);
+}
+
+/* inline */ void audio_start()
+{
+	SDL_PauseAudio(0);
+}
+
+/* inline */ void audio_stop()
+{
+	SDL_PauseAudio(1);
 }
 

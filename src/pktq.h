@@ -9,10 +9,9 @@ typedef struct PacketQueue {
 	int nb_packets;
 	int size;
 	SDL_mutex *mutex;
-	SDL_cond *cond;
 } PacketQueue;
 
-#define PACKET_QUEUE_INITIALIZER {NULL, NULL, 0, 0, NULL, NULL}
+#define PACKET_QUEUE_INITIALIZER {NULL, NULL, 0, 0, NULL}
 
 void packet_queue_init(PacketQueue *q);
 int packet_queue_put(PacketQueue *q, const AVPacket *pkt);

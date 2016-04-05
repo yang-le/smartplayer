@@ -26,7 +26,7 @@ static struct SwsContext *img_convert_ctx = NULL;
 static SDL_Texture* sdlTexture = NULL;
 static SDL_Renderer* sdlRenderer = NULL;
 static SDL_Rect sdlRect = {0, 0, 0, 0};
-
+static SDL_TimerID videoTimerId = 0;
 
 static double get_stream_fps(const AVStream *s)
 {
@@ -43,13 +43,15 @@ static double get_stream_fps(const AVStream *s)
 	return 25.0f;
 }
 
-static Uint32 fire_video_event(Uint32 interval, void *opaque)
+static Uint32 video_proc(Uint32 interval, void *opaque)
 {  
-    SDL_Event event;  
-    event.type = USR_VIDEO_EVENT;  
-    SDL_PushEvent(&event);  
-   
-    return interval;  
+	// read from video_queue and paint
+	AVPacket video_pkt;
+	if (video_dequeue(&video_pkt)) {
+		decode_video_packet(&video_pkt);
+	}
+
+	return interval;
 } 
 
 int decode_video_packet(AVPacket *pkt)
@@ -172,8 +174,6 @@ int sdl_video_init(void)
 	sdlRect.w = width;	
 	sdlRect.h = height;
 
-	SDL_AddTimer(1000 / get_stream_fps(video_stream), fire_video_event, NULL);
-
 	return 0;
 }
 
@@ -190,5 +190,15 @@ int sdl_video_init(void)
 /* inline */ int video_dequeue(AVPacket *pkt)
 {
 	return packet_queue_get(&video_queue, pkt);
+}
+
+/* inline */ void video_start()
+{
+	videoTimerId = SDL_AddTimer(1000 / get_stream_fps(video_stream), video_proc, NULL);
+}
+
+/* inline */ void video_stop()
+{
+	SDL_RemoveTimer(videoTimerId);
 }
 

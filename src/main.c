@@ -95,15 +95,6 @@ static int demux_thread(void *opaque)
 	return 0;
 }
 
-static Uint32 fire_sub_event(Uint32 interval, void *opaque)
-{  
-    SDL_Event event;  
-    event.type = USR_SUB_EVENT;  
-    SDL_PushEvent(&event);  
-   
-    return interval;  
-} 
-
 static void sdl_event_loop()
 {
 	int thread_pause=0;
@@ -112,24 +103,20 @@ static void sdl_event_loop()
 		SDL_Event event;
 		SDL_WaitEvent(&event);
 		
-		if (event.type == USR_VIDEO_EVENT) {
-			if (!thread_pause) {
-				// read from video_queue and paint
-				AVPacket video_pkt;
-				video_dequeue(&video_pkt);
-				decode_video_packet(&video_pkt);
-			}
-		} else if (event.type == USR_SUB_EVENT) {
-			if (!thread_pause) {
-				AVPacket sub_pkt;
-				subtitle_dequeue(&sub_pkt);
-				decode_subtitle_packet(&sub_pkt);
-			}
-		}else if(event.type==SDL_KEYDOWN) {	
+		if(event.type==SDL_KEYDOWN) {	
 			//Pause  
 			if(event.key.keysym.sym==SDLK_SPACE) {
 				thread_pause = !thread_pause;
 				debug_info("%s\n", thread_pause ? "paused" : "playing");
+				if (thread_pause) {
+					video_stop();
+					audio_stop();
+					subtitle_stop();
+				} else {
+					video_start();
+					audio_start();
+					subtitle_start();
+				}
 			}
 		} else if(event.type==SDL_QUIT) {  
 			break;	
@@ -183,10 +170,11 @@ int main(int argc, char *argv[])
 		goto end;
 	}
 
-	debug_info("Demuxing %s%s%sfrom file '%s'\n", infile,
+	debug_info("Demuxing %s%s%sfrom file '%s'\n",
 		(video_ok < 0) ? "" : "video ",
 		(audio_ok < 0) ? "" : "audio ",
-		(subtitle_ok < 0) ? "" : "subtitle ");
+		(subtitle_ok < 0) ? "" : "subtitle ",
+		infile);
 
 	Uint32 sdl_flags = 0;
 	sdl_flags |= (video_ok < 0) ? 0 : SDL_INIT_VIDEO;
@@ -198,9 +186,12 @@ int main(int argc, char *argv[])
 		goto end;
 	}
 
-	SDL_AddTimer(2000, fire_sub_event, NULL);
 	SDL_CreateThread(demux_thread,NULL,NULL);
 
+	video_start();
+	audio_start();
+	subtitle_start();
+	
 	sdl_event_loop();
 	
 end:

@@ -1,6 +1,8 @@
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 
+#include <SDL2/SDL.h>
+
 #include "pktq.h"
 #include "subtitle.h"
 
@@ -10,6 +12,17 @@ static AVCodecContext *sub_dec_ctx = NULL;
 static AVSubtitle _frame_sub, *frame_sub = &_frame_sub;
 static int sub_frame_count = 0;
 static PacketQueue sub_queue = PACKET_QUEUE_INITIALIZER;
+static SDL_TimerID subtitleTimerId = 0;
+
+static Uint32 subtitle_proc(Uint32 interval, void *opaque)
+{  
+	AVPacket sub_pkt;
+	if (subtitle_dequeue(&sub_pkt)) {
+		decode_subtitle_packet(&sub_pkt);
+	}
+
+	return interval;  
+} 
 
 int decode_subtitle_packet(AVPacket *pkt)
 {
@@ -64,5 +77,15 @@ int close_subtitle_codec(void)
 /* inline */ int subtitle_dequeue(AVPacket *pkt)
 {
 	return packet_queue_get(&sub_queue, pkt);
+}
+
+/* inline */ void subtitle_start()
+{
+	subtitleTimerId = SDL_AddTimer(1000, subtitle_proc, NULL);
+}
+
+/* inline */ void subtitle_stop()
+{
+	SDL_RemoveTimer(subtitleTimerId);
 }
 
