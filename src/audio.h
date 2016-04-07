@@ -14,4 +14,6 @@ int audio_dequeue(AVPacket *pkt);
 void audio_start();
 void audio_stop();
 
+int get_audio_pts();
+
 #endif

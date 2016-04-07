@@ -104,10 +104,11 @@ int decode_audio_packet(AVPacket *pkt)
         if (*got_frame) {
             size_t unpadded_linesize = frame_audio->nb_samples * av_get_bytes_per_sample(frame_audio->format);
 		frame_audio->linesize[0] = unpadded_linesize;	// for test
-		debug_info("audio_frame n:%d nb_samples:%d pts:%s\n",
-                   audio_frame_count++, frame_audio->nb_samples,
-                   av_ts2timestr(frame_audio->pts, &audio_dec_ctx->time_base));
-
+#if 1
+		debug_info("audio_frame n:%d nb_samples:%d pts:%d\n",
+			audio_frame_count++, frame_audio->nb_samples,
+			get_audio_pts());
+#endif
             /* Write the raw audio data samples of the first plane. This works
              * fine for packed formats (e.g. AV_SAMPLE_FMT_S16). However,
              * most audio decoders output planar audio, which uses a separate
@@ -193,5 +194,15 @@ int sdl_audio_init(void)
 /* inline */ void audio_stop()
 {
 	SDL_PauseAudio(1);
+}
+
+/* inline */ int get_audio_pts()
+{
+	int64_t pts = av_frame_get_best_effort_timestamp(frame_audio);
+	if (pts == AV_NOPTS_VALUE) {
+		return -1;
+	} else {
+		return av_rescale(pts, 1000, frame_audio->sample_rate);
+	}
 }
 

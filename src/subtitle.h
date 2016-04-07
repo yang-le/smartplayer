@@ -12,4 +12,6 @@ int subtitle_dequeue(AVPacket *pkt);
 void subtitle_start();
 void subtitle_stop();
 
+int get_subtitle_pts();
+
 #endif

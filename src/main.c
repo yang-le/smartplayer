@@ -188,10 +188,10 @@ int main(int argc, char *argv[])
 
 	SDL_CreateThread(demux_thread,NULL,NULL);
 
-	video_start();
 	audio_start();
+	video_start();
 	subtitle_start();
-	
+
 	sdl_event_loop();
 	
 end:

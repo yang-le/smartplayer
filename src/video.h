@@ -14,4 +14,6 @@ int video_dequeue(AVPacket *pkt);
 void video_start();
 void video_stop();
 
+int get_video_pts();
+
 #endif

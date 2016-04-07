@@ -45,14 +45,23 @@ static double get_stream_fps(const AVStream *s)
 
 static Uint32 video_proc(Uint32 interval, void *opaque)
 {  
+	int delta = 0;
+	int vt = 1000 / get_stream_fps(video_stream);
+
 	// read from video_queue and paint
 	AVPacket video_pkt;
 	if (video_dequeue(&video_pkt)) {
 		decode_video_packet(&video_pkt);
+
+		int v_pts = get_video_pts();
+		int a_pts = get_audio_pts();
+		if ((v_pts > 0) && (a_pts > 0)) {
+			delta = v_pts - a_pts;
+		}
 	}
 
-	return interval;
-} 
+	return (vt + delta > 0) ? (vt + delta) : 1;
+}
 
 int decode_video_packet(AVPacket *pkt)
 {
@@ -85,9 +94,9 @@ int decode_video_packet(AVPacket *pkt)
                 return -1;
             }
 
-            debug_info("video_frame n:%d coded_n:%d pts:%s\n",
+            debug_info("video_frame n:%d coded_n:%d pts:%d\n",
                    video_frame_count++, frame_video->coded_picture_number,
-                   av_ts2timestr(frame_video->pts, &video_dec_ctx->time_base));
+                   get_video_pts());
 
 		sws_scale(img_convert_ctx, (const uint8_t * const*)frame_video->data, frame_video->linesize, 0, height,	
 			frame_YUV->data, frame_YUV->linesize);
@@ -194,11 +203,21 @@ int sdl_video_init(void)
 
 /* inline */ void video_start()
 {
-	videoTimerId = SDL_AddTimer(1000 / get_stream_fps(video_stream), video_proc, NULL);
+	videoTimerId = SDL_AddTimer(1, video_proc, NULL);
 }
 
 /* inline */ void video_stop()
 {
 	SDL_RemoveTimer(videoTimerId);
+}
+
+/* inline */ int get_video_pts()
+{
+	int64_t pts = av_frame_get_best_effort_timestamp(frame_video);
+	if (pts == AV_NOPTS_VALUE) {
+		return -1;
+	} else {
+		return av_rescale_q(pts, video_stream->time_base, (AVRational){1, 1000});
+	}
 }
 
