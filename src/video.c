@@ -2,8 +2,11 @@
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
 #include <libavutil/timestamp.h>
+#include <libavutil/opt.h>
+#include <libavfilter/avfiltergraph.h>
+#include <libavfilter/buffersink.h>
+#include <libavfilter/buffersrc.h>
 
 #include <SDL2/SDL.h>
 
@@ -15,18 +18,107 @@
 static int video_stream_idx = -1;
 static AVStream *video_stream = NULL;
 static AVCodecContext *video_dec_ctx = NULL;
-static AVFrame *frame_video = NULL, *frame_YUV = NULL;
+static AVFrame *frame_video = NULL;
 static int video_frame_count = 0;
 static PacketQueue video_queue = PACKET_QUEUE_INITIALIZER;
 
 static int width = 0, height = 0;
 static enum AVPixelFormat pix_fmt = AV_PIX_FMT_NONE;
-static struct SwsContext *img_convert_ctx = NULL;
 
 static SDL_Texture* sdlTexture = NULL;
 static SDL_Renderer* sdlRenderer = NULL;
 static SDL_Rect sdlRect = {0, 0, 0, 0};
 static SDL_TimerID videoTimerId = 0;
+
+static AVFilterContext *buffersink_ctx;
+static AVFilterContext *buffersrc_ctx;
+static AVFilterGraph *filter_graph;
+
+int init_video_filters(const char *filters_descr)
+{
+    char args[512];
+    int ret = 0;
+    AVFilter *buffersrc  = avfilter_get_by_name("buffer");
+    AVFilter *buffersink = avfilter_get_by_name("buffersink");
+    AVFilterInOut *outputs = avfilter_inout_alloc();
+    AVFilterInOut *inputs  = avfilter_inout_alloc();
+    AVRational time_base = video_stream->time_base;
+    enum AVPixelFormat pix_fmts[] = { AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE };
+
+    filter_graph = avfilter_graph_alloc();
+    if (!outputs || !inputs || !filter_graph) {
+        ret = AVERROR(ENOMEM);
+        goto end;
+    }
+
+    /* buffer video source: the decoded frames from the decoder will be inserted here. */
+    snprintf(args, sizeof(args),
+            "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+            width, height, pix_fmt, time_base.num, time_base.den,
+            video_dec_ctx->sample_aspect_ratio.num, video_dec_ctx->sample_aspect_ratio.den);
+
+    ret = avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in",
+                                       args, NULL, filter_graph);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot create buffer source\n");
+        goto end;
+    }
+
+    /* buffer video sink: to terminate the filter chain. */
+    ret = avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out",
+                                       NULL, NULL, filter_graph);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot create buffer sink\n");
+        goto end;
+    }
+
+    ret = av_opt_set_int_list(buffersink_ctx, "pix_fmts", pix_fmts,
+                              AV_PIX_FMT_NONE, AV_OPT_SEARCH_CHILDREN);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "Cannot set output pixel format\n");
+        goto end;
+    }
+
+    /*
+     * Set the endpoints for the filter graph. The filter_graph will
+     * be linked to the graph described by filters_descr.
+     */
+
+    /*
+     * The buffer source output must be connected to the input pad of
+     * the first filter described by filters_descr; since the first
+     * filter input label is not specified, it is set to "in" by
+     * default.
+     */
+    outputs->name       = av_strdup("in");
+    outputs->filter_ctx = buffersrc_ctx;
+    outputs->pad_idx    = 0;
+    outputs->next       = NULL;
+
+    /*
+     * The buffer sink input must be connected to the output pad of
+     * the last filter described by filters_descr; since the last
+     * filter output label is not specified, it is set to "out" by
+     * default.
+     */
+    inputs->name       = av_strdup("out");
+    inputs->filter_ctx = buffersink_ctx;
+    inputs->pad_idx    = 0;
+    inputs->next       = NULL;
+
+    if ((ret = avfilter_graph_parse_ptr(filter_graph, filters_descr,
+                                    &inputs, &outputs, NULL)) < 0)
+        goto end;
+
+    if ((ret = avfilter_graph_config(filter_graph, NULL)) < 0)
+        goto end;
+
+end:
+    avfilter_inout_free(&inputs);
+    avfilter_inout_free(&outputs);
+
+    return ret;
+}
 
 static double get_stream_fps(const AVStream *s)
 {
@@ -98,17 +190,32 @@ int decode_video_packet(AVPacket *pkt)
                    video_frame_count++, frame_video->coded_picture_number,
                    get_video_pts());
 
-		sws_scale(img_convert_ctx, (const uint8_t * const*)frame_video->data, frame_video->linesize, 0, height,	
-			frame_YUV->data, frame_YUV->linesize);
+		/* push the decoded frame into the filtergraph */
+		ret = av_buffersrc_add_frame(buffersrc_ctx, frame_video);
+		if (ret < 0) {
+			av_log(NULL, AV_LOG_ERROR, "Error while feeding the filtergraph\n");
+			return ret;
+		}
+		
+		/* pull filtered frames from the filtergraph */
+		while (1) {
+			ret = av_buffersink_get_frame(buffersink_ctx, frame_video);
+			if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+				break;
+			if (ret < 0)
+				return ret;
+			
+			SDL_UpdateYUVTexture(sdlTexture, &sdlRect,	
+			frame_video->data[0], frame_video->linesize[0],  
+			frame_video->data[1], frame_video->linesize[1],  
+			frame_video->data[2], frame_video->linesize[2]);
+			
+			SDL_RenderClear(sdlRenderer);	 
+			SDL_RenderCopy(sdlRenderer, sdlTexture,  NULL, &sdlRect);	  
+			SDL_RenderPresent(sdlRenderer); 
 
-		SDL_UpdateYUVTexture(sdlTexture, &sdlRect,	
-		frame_YUV->data[0], frame_YUV->linesize[0],  
-		frame_YUV->data[1], frame_YUV->linesize[1],  
-		frame_YUV->data[2], frame_YUV->linesize[2]);
-
-		SDL_RenderClear(sdlRenderer);    
-		SDL_RenderCopy(sdlRenderer, sdlTexture,  NULL, &sdlRect);	  
-		SDL_RenderPresent(sdlRenderer);	
+			av_frame_unref(frame_video);
+		}
         }
     }
 
@@ -122,8 +229,7 @@ int open_video_codec(AVFormatContext *fmt_ctx)
 		packet_queue_init(&video_queue);
 
 		frame_video = av_frame_alloc();
-		frame_YUV = av_frame_alloc();
-		if (!frame_video || !frame_YUV) {
+		if (!frame_video) {
 			fprintf(stderr, "Could not allocate frame\n");
 			return AVERROR(ENOMEM);
 		}
@@ -134,18 +240,6 @@ int open_video_codec(AVFormatContext *fmt_ctx)
 		width = video_dec_ctx->width;
 		height = video_dec_ctx->height;
 		pix_fmt = video_dec_ctx->pix_fmt;
-
-		unsigned char *out_buffer=(unsigned char *)av_malloc(av_image_get_buffer_size(AV_PIX_FMT_YUV420P, width, height, 1));  
-		if (!out_buffer) {
-			fprintf(stderr, "Could not allocate yuv_buffer\n");
-			return AVERROR(ENOMEM);
-		}
-		
-		av_image_fill_arrays(frame_YUV->data, frame_YUV->linesize,out_buffer, AV_PIX_FMT_YUV420P,width, height,1);
-		
-		/* allocate img_convert_ctx */
-		img_convert_ctx = sws_getContext(width, height, pix_fmt,
-			width, height, AV_PIX_FMT_YUV420P, SWS_BICUBIC, NULL, NULL, NULL);
 	}
 	
 	return ret;
@@ -154,10 +248,7 @@ int open_video_codec(AVFormatContext *fmt_ctx)
 int close_video_codec(void)
 {
 	av_frame_free(&frame_video);
-	av_frame_free(&frame_YUV);
-
 	avcodec_close(video_dec_ctx);
-	sws_freeContext(img_convert_ctx);
 }
 
 int sdl_video_init(void)

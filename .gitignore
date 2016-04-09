@@ -1,3 +1,7 @@
+*.cache
+build
+*~
+
 # Object files
 *.o
 *.ko

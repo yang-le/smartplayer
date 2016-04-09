@@ -14,6 +14,7 @@ AC_PROG_CC
 AC_CHECK_LIB([avformat], [av_register_all])
 AC_CHECK_LIB([avcodec], [avcodec_open2])
 AC_CHECK_LIB([avutil], [av_freep])
+AC_CHECK_LIB([avfilter], [avfilter_register_all])
 AC_CHECK_LIB([swscale], [sws_getContext])
 AC_CHECK_LIB([SDL2], [SDL_Init])
 

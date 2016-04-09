@@ -143,6 +143,7 @@ int main(int argc, char *argv[])
 	/* register all formats and codecs */
 	av_register_all();
 	avformat_network_init();
+	avfilter_register_all();
 
 	/* open input file, and allocate format context */
 	if (avformat_open_input(&fmt_ctx, infile, NULL, NULL) < 0) {
@@ -185,6 +186,10 @@ int main(int argc, char *argv[])
 		ret = 1;
 		goto end;
 	}
+
+	char args[512];
+	snprintf(args, sizeof(args), "subtitles=%s,crop=floor(in_w/2)*2:floor(in_h/2)*2", infile);
+	init_video_filters(args);
 
 	SDL_CreateThread(demux_thread,NULL,NULL);
 

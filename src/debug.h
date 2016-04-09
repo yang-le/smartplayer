@@ -3,6 +3,10 @@
 
 #include <stdio.h>
 
+#ifndef NDEBUG
 #define debug_info(fmt, ...)	printf(fmt, ## __VA_ARGS__)
+#else
+#define debug_info(fmt, ...)
+#endif
 
 #endif
