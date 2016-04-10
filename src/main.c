@@ -1,7 +1,7 @@
 #include "config.h"
 
 #include <stdio.h>
-#include <unistd.h>
+#include <getopt.h>
 
 #include <libavformat/avformat.h>
 #include <SDL2/SDL.h>
@@ -16,33 +16,47 @@
 #define ARG_OPT(x) #x"::"
 
 static AVFormatContext *fmt_ctx = NULL;
+static char *vf = NULL;
+static char *af = NULL;
 
 static char* parse_args(int argc, char *argv[])
 {
 	int opt = 0;
-	char *infile = NULL;
-	
-	while ((opt = getopt(argc, argv, ARG_REQ(i)"hv")) != -1) {
+
+	const struct option long_options[] = {  
+		   {"help", 			no_argument, 		NULL, 'h'},  
+		   {"debug-level",  	required_argument, 	NULL, 'd'},  
+		   {"video-filter", 		required_argument, 	NULL, 'V'}, 
+		   {"audio-filter", 		required_argument, 	NULL, 'A'}, 
+		   {0, 0, 0, 0}  
+	};
+
+	while ((opt = getopt_long(argc, argv, ARG_REQ(d)"hv", long_options, NULL)) != -1) {
 		switch (opt) {
-		case 'i':
-			infile = optarg;
+		case 'v':
+			printf(PACKAGE_STRING"\n");
 			break;
 		case 'h':
 			printf("show help info here\n");
 			break;
-		case 'v':
-			printf("show version info here\n");
+		case 'd':
+			debug_info("set dbg-lvl=%d\n", atoi(optarg));
+			av_log_set_level(atoi(optarg));
+			break;
+		case 'V':
+			vf = optarg;
+			debug_info("set vf=%s\n", vf);
+			break;
+		case 'A':
+			af = optarg;
+			debug_info("set af=%s\n", af);
 			break;
 		default:
 			break;
 		}
 	}
 
-	if (!infile) {
-		infile = argv[optind];
-	}
-
-	return infile;
+	return argv[optind];
 }
 
 static int sdl_init(Uint32 flags)
@@ -188,7 +202,11 @@ int main(int argc, char *argv[])
 	}
 
 	char args[512];
-	snprintf(args, sizeof(args), "subtitles=%s,crop=floor(in_w/2)*2:floor(in_h/2)*2", infile);
+	if (vf) {
+		snprintf(args, sizeof(args), "crop=floor(in_w/2)*2:floor(in_h/2)*2,%s", vf);
+	} else {
+		snprintf(args, sizeof(args), "crop=floor(in_w/2)*2:floor(in_h/2)*2");
+	}
 	init_video_filters(args);
 
 	SDL_CreateThread(demux_thread,NULL,NULL);

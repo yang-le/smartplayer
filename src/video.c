@@ -190,6 +190,10 @@ int decode_video_packet(AVPacket *pkt)
                    video_frame_count++, frame_video->coded_picture_number,
                    get_video_pts());
 
+		// IMPORTANT!!! fix pts !!!
+		frame_video->pts = av_frame_get_best_effort_timestamp(frame_video);
+		// IMPORTANT!!! fix pts !!!
+
 		/* push the decoded frame into the filtergraph */
 		ret = av_buffersrc_add_frame(buffersrc_ctx, frame_video);
 		if (ret < 0) {
