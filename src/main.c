@@ -158,6 +158,7 @@ int main(int argc, char *argv[])
 	av_register_all();
 	avformat_network_init();
 	avfilter_register_all();
+	avdevice_register_all();
 
 	/* open input file, and allocate format context */
 	if (avformat_open_input(&fmt_ctx, infile, NULL, NULL) < 0) {
@@ -193,7 +194,7 @@ int main(int argc, char *argv[])
 
 	Uint32 sdl_flags = 0;
 	sdl_flags |= (video_ok < 0) ? 0 : SDL_INIT_VIDEO;
-	sdl_flags |= (video_ok < 0) ? 0 : SDL_INIT_AUDIO;
+	sdl_flags |= (audio_ok < 0) ? 0 : SDL_INIT_AUDIO;
 	
 	if (sdl_init(sdl_flags)) {
 		fprintf(stderr, "SDL init failed!\n");
@@ -211,9 +212,9 @@ int main(int argc, char *argv[])
 
 	SDL_CreateThread(demux_thread,NULL,NULL);
 
-	audio_start();
-	video_start();
-	subtitle_start();
+	if (audio_ok >= 0) audio_start();
+	if (video_ok >= 0) video_start();
+	if (subtitle_ok >= 0) subtitle_start();
 
 	sdl_event_loop();
 	

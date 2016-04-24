@@ -198,7 +198,7 @@ int sdl_audio_init(void)
 
 /* inline */ int get_audio_pts()
 {
-	int64_t pts = av_frame_get_best_effort_timestamp(frame_audio);
+	int64_t pts = frame_audio ? av_frame_get_best_effort_timestamp(frame_audio) : AV_NOPTS_VALUE;
 	if (pts == AV_NOPTS_VALUE) {
 		return -1;
 	} else {

@@ -308,7 +308,7 @@ int sdl_video_init(void)
 
 /* inline */ int get_video_pts()
 {
-	int64_t pts = av_frame_get_best_effort_timestamp(frame_video);
+	int64_t pts = frame_video ? av_frame_get_best_effort_timestamp(frame_video) : AV_NOPTS_VALUE;
 	if (pts == AV_NOPTS_VALUE) {
 		return -1;
 	} else {

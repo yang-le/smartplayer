@@ -9,6 +9,9 @@
 /* Define to 1 if you have the `avcodec' library (-lavcodec). */
 #undef HAVE_LIBAVCODEC
 
+/* Define to 1 if you have the `avdevice' library (-lavdevice). */
+#undef HAVE_LIBAVDEVICE
+
 /* Define to 1 if you have the `avfilter' library (-lavfilter). */
 #undef HAVE_LIBAVFILTER
 
